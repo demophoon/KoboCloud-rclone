@@ -47,15 +47,6 @@ is_remove_deleted() {
 }
 
 # Flow functions
-activate_internet() {
-    info "activating internet"
-    if has_qndb; then
-        echo "sending kobo command"
-        /usr/bin/qndb -m wfmConnectWirelessSilently
-    else
-        echo "not sending kobo command"
-    fi
-}
 wait_for_internet() {
     i=0;
     info "waiting for network connected"
@@ -80,26 +71,24 @@ has_internet() {
 
 install_dependencies() {
     # check for qbdb
-    if [ "$PLATFORM" = "Kobo" ]
-    then
-      if has_qndb; then
-          info "NickelDBus found"
-      else
-          info "NickelDBus not found: installing it!"
-          wget "https://github.com/shermp/NickelDBus/releases/download/0.2.0/KoboRoot.tgz" -O - | tar xz -C /
-      fi
-      if [ -f "${RCLONE}" ]
-      then
-          info "rclone found"
-      else
-          info "rclone not found: installing it!"
-          mkdir -p "${RCLONEDIR}"
-          rcloneTemp="${RCLONEDIR}/rclone.tmp.zip"
-          rm -f "${rcloneTemp}"
-          wget "https://github.com/rclone/rclone/releases/download/v1.64.0/rclone-v1.64.0-linux-arm-v7.zip" -O "${rcloneTemp}"
-          unzip -p "${rcloneTemp}" rclone-v1.64.0-linux-arm-v7/rclone > ${RCLONE}
-          rm -f "${rcloneTemp}"
-      fi
+    if [ "$PLATFORM" = "Kobo" ]; then
+        if has_qndb; then
+            info "NickelDBus found"
+        else
+            info "NickelDBus not found: installing it!"
+            wget "https://github.com/shermp/NickelDBus/releases/download/0.2.0/KoboRoot.tgz" -O - | tar xz -C /
+        fi
+        if [ -f "${RCLONE}" ]; then
+            info "rclone found"
+        else
+            info "rclone not found: installing it!"
+            mkdir -p "${RCLONEDIR}"
+            rcloneTemp="${RCLONEDIR}/rclone.tmp.zip"
+            rm -f "${rcloneTemp}"
+            wget "https://github.com/rclone/rclone/releases/download/v1.64.0/rclone-v1.64.0-linux-arm-v7.zip" -O "${rcloneTemp}"
+            unzip -p "${rcloneTemp}" rclone-v1.64.0-linux-arm-v7/rclone > ${RCLONE}
+            rm -f "${rcloneTemp}"
+        fi
     fi
 }
 
@@ -123,7 +112,12 @@ fetch_books() {
             remote=$(echo "$url" | cut -d: -f1)
             dir="$Lib/$remote/"
             mkdir -p "$dir"
-            run ${RCLONE} ${command} --no-check-certificate -v --config ${RCloneConfig} "$url" "$dir"
+            run ${RCLONE} ${command} --error-on-no-transfer --no-check-certificate -v --config ${RCloneConfig} "$url" "$dir"
+            if [ $? = 0 ]; then
+                update_libraries
+            else
+                info "skipping library refresh"
+            fi
         fi
     done < $UserConfig
     info "completed fetching books"
@@ -150,11 +144,9 @@ main() {
         echo "$Lib/filesList.log" > "$Lib/filesList.log"
     fi
 
-    activate_internet
     wait_for_internet
     install_dependencies
     fetch_books
-    update_libraries
 
     run rm "$Logs/index" >/dev/null 2>&1
     info "done!"
