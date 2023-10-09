@@ -1,93 +1,164 @@
 #!/bin/sh
 #Kobocloud getter
 
-TEST=$1
+set +x
 
+TEST=$1
 #load config
 . $(dirname $0)/config.sh
 
-#check if Kobocloud contains the line "UNINSTALL"
-if grep -q '^UNINSTALL$' $UserConfig; then
-    echo "Uninstalling KoboCloud!"
-    $KC_HOME/uninstall.sh
-    exit 0
-fi
+# Print functions
+raw_info() {
+    echo "`$Dt`: $*"
+}
+info() {
+    raw_info "(  ) $*"
+}
+fail() {
+    raw_info "(!!) $*"
+    toast "'$*'"
+    exit 1
+}
+run() {
+    raw_info "(ex) Running $*"
+    $@
+}
 
-if grep -q "^REMOVE_DELETED$" $UserConfig; then
-	echo "$Lib/filesList.log" > "$Lib/filesList.log"
-fi
-
-
-if [ "$TEST" = "" ]
-then
-    #check internet connection
-    echo "`$Dt` waiting for internet connection"
-    r=1;i=0
-    while [ $r != 0 ]; do
-    if [ $i -gt 60 ]; then
-        ping -c 1 -w 3 aws.amazon.com >/dev/null 2>&1
-        echo "`$Dt` error! no connection detected" 
-        exit 1
+# UI Functions
+toast() {
+    raw_info "(to) $*"
+    if has_qndb; then
+        /usr/bin/qndb -m mwcToast 3000 "$*"
     fi
-    ping -c 1 -w 3 aws.amazon.com >/dev/null 2>&1
-    r=$?
-    if [ $r != 0 ]; then sleep 1; fi
-    i=$(($i + 1))
-    done
-fi
+}
 
-# check for qbdb
-if [ "$PLATFORM" = "Kobo" ]
-then
-  if [ -f "/usr/bin/qndb" ]
-  then
-      echo "NickelDBus found"
-  else
-      echo "NickelDBus not found: installing it!"
-      wget "https://github.com/shermp/NickelDBus/releases/download/0.2.0/KoboRoot.tgz" -O - | tar xz -C /
-  fi
-  if [ -f "${RCLONE}" ]
-  then
-      echo "rclone found"
-  else
-      echo "rclone not found: installing it!"
-      mkdir -p "${RCLONEDIR}"
-      rcloneTemp="${RCLONEDIR}/rclone.tmp.zip"
-      rm -f "${rcloneTemp}"
-      wget "https://github.com/rclone/rclone/releases/download/v1.64.0/rclone-v1.64.0-linux-arm-v7.zip" -O "${rcloneTemp}"
-      unzip -p "${rcloneTemp}" rclone-v1.64.0-linux-arm-v7/rclone > ${RCLONE}
-      rm -f "${rcloneTemp}"
-  fi
-fi
+# Test functions
+has_qndb() {
+    if [ -f "/usr/bin/qndb" ]; then
+        return 0
+    fi
+    return 1
+}
+is_uninstall() {
+    grep -q '^UNINSTALL$' $UserConfig
+}
+is_remove_deleted() {
+    grep -q '^REMOVE_DELETED$' $UserConfig
+}
 
-while read url || [ -n "$url" ]; do
-  if echo "$url" | grep -q '^#'; then
-    continue
-  elif echo "$url" | grep -q "^REMOVE_DELETED$"; then
-	  echo "Will delete files no longer present on remote"
-  elif [ -n "$url" ]; then
-    echo "Getting $url"    
-    command=""
-    if grep -q "^REMOVE_DELETED$" $UserConfig; then    
-      # Remove deleted, do a sync.
-      command="sync"
+# Flow functions
+activate_internet() {
+    info "activating internet"
+    if has_qndb; then
+        echo "sending kobo command"
+        /usr/bin/qndb -m wfmConnectWirelessSilently
     else
-      # Don't remove deleted, do a copy.
-      command="copy"
+        echo "not sending kobo command"
     fi
-    remote=$(echo "$url" | cut -d: -f1)
-    dir="$Lib/$remote/"
-    mkdir -p "$dir"
-    echo ${RCLONE} ${command} --no-check-certificate -v --config ${RCloneConfig} \"$url\" \"$dir\"
-    ${RCLONE} ${command} --no-check-certificate -v --config ${RCloneConfig} "$url" "$dir"
-  fi
-done < $UserConfig
+}
+wait_for_internet() {
+    i=0;
+    info "waiting for network connected"
+    if has_qndb; then
+        /usr/bin/qndb -t 30000 -s wmNetworkConnected
+    fi
+    info "network connected"
+    while [ $i -lt 10 ]; do
+        info "Waiting for internet connection... $i"
+        if has_internet; then
+            info "internet connected successfully"
+            return 0
+        fi
+        sleep 1
+        i=$((i+1))
+    done
+    fail "Couldn't connect to internet"
+}
+has_internet() {
+    wget --spider --quiet http://example.com
+}
 
-if [ "$TEST" = "" ]
-then
-    # Use NickelDBus for library refresh
-    /usr/bin/qndb -t 3000 -s pfmDoneProcessing -m pfmRescanBooksFull
-fi
+install_dependencies() {
+    # check for qbdb
+    if [ "$PLATFORM" = "Kobo" ]
+    then
+      if has_qndb; then
+          info "NickelDBus found"
+      else
+          info "NickelDBus not found: installing it!"
+          wget "https://github.com/shermp/NickelDBus/releases/download/0.2.0/KoboRoot.tgz" -O - | tar xz -C /
+      fi
+      if [ -f "${RCLONE}" ]
+      then
+          info "rclone found"
+      else
+          info "rclone not found: installing it!"
+          mkdir -p "${RCLONEDIR}"
+          rcloneTemp="${RCLONEDIR}/rclone.tmp.zip"
+          rm -f "${rcloneTemp}"
+          wget "https://github.com/rclone/rclone/releases/download/v1.64.0/rclone-v1.64.0-linux-arm-v7.zip" -O "${rcloneTemp}"
+          unzip -p "${rcloneTemp}" rclone-v1.64.0-linux-arm-v7/rclone > ${RCLONE}
+          rm -f "${rcloneTemp}"
+      fi
+    fi
+}
 
-rm "$Logs/index" >/dev/null 2>&1
-echo "`$Dt` done"
+fetch_books() {
+    info "fetching books from kobocloud..."
+    while read url || [ -n "$url" ]; do
+        if echo "$url" | grep -q '^#'; then
+            continue
+        elif echo "$url" | grep -q "^REMOVE_DELETED$"; then
+            info "Will delete files no longer present on remote"
+        elif [ -n "$url" ]; then
+            info "Getting $url"
+            command=""
+            if grep -q "^REMOVE_DELETED$" $UserConfig; then
+              # Remove deleted, do a sync.
+              command="sync"
+            else
+              # Don't remove deleted, do a copy.
+              command="copy"
+            fi
+            remote=$(echo "$url" | cut -d: -f1)
+            dir="$Lib/$remote/"
+            mkdir -p "$dir"
+            run ${RCLONE} ${command} --no-check-certificate -v --config ${RCloneConfig} "$url" "$dir"
+        fi
+    done < $UserConfig
+    info "completed fetching books"
+}
+
+update_libraries() {
+    info "refreshing libraries"
+    if has_qndb; then
+        /usr/bin/qndb -t 3000 -s pfmDoneProcessing -m pfmRescanBooksFull
+    fi
+}
+
+
+# Main function
+main() {
+    if is_uninstall; then
+        info "uninstalling KoboCloud!"
+        run $KC_HOME/uninstall.sh
+        exit $?
+    fi
+
+    if is_remove_deleted; then
+        info "Remove Deleted detected."
+        echo "$Lib/filesList.log" > "$Lib/filesList.log"
+    fi
+
+    activate_internet
+    wait_for_internet
+    install_dependencies
+    fetch_books
+    update_libraries
+
+    run rm "$Logs/index" >/dev/null 2>&1
+    info "done!"
+}
+
+main
+exit 0
