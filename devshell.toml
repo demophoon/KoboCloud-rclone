@@ -1,0 +1,13 @@
+# https://numtide.github.io/devshell
+[devshell]
+packages = [
+  "rclone"
+]
+
+[[env]]
+name = "DEVSHELL_NO_MOTD"
+value = "1"
+
+[[env]]
+name = "DEBUG"
+value = "1"
